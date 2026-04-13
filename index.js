@@ -1,13 +1,14 @@
 const express = require("express");
 const multer = require("multer");
 const ffmpeg = require("fluent-ffmpeg");
-const path = require("path");
+const fs = require("fs");
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
-// アップロード＆動画生成
 app.post("/generate", upload.single("video"), (req, res) => {
+
+  console.log("リクエスト受信");
 
   const inputPath = req.file.path;
   const outputPath = `output_${Date.now()}.mp4`;
@@ -20,6 +21,7 @@ app.post("/generate", upload.single("video"), (req, res) => {
       {
         filter: "drawtext",
         options: {
+          fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
           text: title,
           fontsize: 48,
           fontcolor: "white",
@@ -40,6 +42,7 @@ app.post("/generate", upload.single("video"), (req, res) => {
       {
         filter: "drawtext",
         options: {
+          fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
           text: subtitle,
           fontsize: 36,
           fontcolor: "white",
@@ -49,11 +52,18 @@ app.post("/generate", upload.single("video"), (req, res) => {
       }
     ])
     .on("end", () => {
+
+      console.log("動画生成完了");
+
+      if (!fs.existsSync(outputPath)) {
+        return res.status(500).send("動画生成失敗");
+      }
+
       res.download(outputPath);
     })
     .on("error", (err) => {
-      console.error(err);
-      res.status(500).send("Error");
+      console.error("FFmpegエラー:", err);
+      res.status(500).send(err.message);
     })
     .save(outputPath);
 });
