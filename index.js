@@ -100,10 +100,15 @@ app.post("/generate", upload.single("video"), (req, res) => {
 
       return res.json({ url: fileUrl });
     })
-    .on("error", (err) => {
-      console.error("FFmpegエラー:", err);
-      return res.status(500).json({ error: err.message });
-    })
+.on("error", (err, stdout, stderr) => {
+  console.error("FFmpegエラー:", err.message);
+  console.error("stderr:", stderr);
+
+  return res.status(500).json({
+    error: err.message,
+    detail: stderr
+  });
+})
     .save(outputPath);
 });
 
