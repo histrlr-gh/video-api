@@ -8,111 +8,145 @@ const app = express();
 
 // ===== フォルダ準備 =====
 const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
-}
+const outputDir = path.join(__dirname, "outputs");
+
+[uploadDir, outputDir].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
 
 // ===== multer設定 =====
-const upload = multer({ dest: uploadDir });
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 500 * 1024 * 1024 } // 500MB上限
+});
 
-// ===== 静的ファイル公開（動画URL用）=====
-app.use(express.static(__dirname));
+// ===== 静的ファイル公開（outputs フォルダを公開）=====
+app.use("/outputs", express.static(outputDir));
 
-// ===== ログ確認用 =====
+// ===== ヘルスチェック（Renderのスリープ対策確認用）=====
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
+// ===== ログ =====
 app.use((req, res, next) => {
   console.log("アクセス:", req.method, req.url);
   next();
 });
 
+// ===== 日本語フォントパス =====
+const FONT_PATH = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc";
+
 // ===== メイン処理 =====
 app.post("/generate", upload.single("video"), (req, res) => {
-
   console.log("リクエスト受信");
 
-  // ファイルチェック
   if (!req.file) {
-    console.log("ファイルがありません");
     return res.status(400).json({ error: "ファイルなし" });
   }
 
   const inputPath = req.file.path;
   const outputFileName = `output_${Date.now()}.mp4`;
-  const outputPath = path.join(__dirname, outputFileName);
+  const outputPath = path.join(outputDir, outputFileName);
 
-  const title = req.body.title || "";
-  const subtitle = req.body.subtitle || "";
+  // テキストのエスケープ（FFmpeg用：コロンやシングルクォートを処理）
+  const escapeText = (text) => {
+    return (text || "").replace(/\\/g, "\\\\")
+                       .replace(/'/g, "\\'")
+                       .replace(/:/g, "\\:");
+  };
 
-  console.log("入力ファイル:", inputPath);
-  console.log("出力ファイル:", outputPath);
+  const title    = escapeText(req.body.title);
+  const subtitle = escapeText(req.body.subtitle);
+
+  console.log("タイトル:", title);
+  console.log("テロップ:", subtitle);
+  console.log("入力:", inputPath);
+  console.log("出力:", outputPath);
 
   ffmpeg(inputPath)
     .videoFilters([
-      {
-        filter: "drawtext",
-        options: {
-          fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-          text: title,
-          fontsize: 48,
-          fontcolor: "white",
-          x: "(w-text_w)/2",
-          y: 50
-        }
-      },
+      // タイトル（上部・背景付き）
       {
         filter: "drawbox",
         options: {
-          y: "h-200",
-          color: "black@0.6",
+          x: 0, y: 0,
           width: "iw",
-          height: 200,
+          height: 80,
+          color: "black@0.6",
           t: "fill"
         }
       },
       {
         filter: "drawtext",
         options: {
-          fontfile: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-          text: subtitle,
-          fontsize: 36,
+          fontfile: FONT_PATH,
+          text: title,
+          fontsize: 40,
           fontcolor: "white",
-          x: 50,
-          y: "h-150"
+          x: "(w-text_w)/2",
+          y: 20
+        }
+      },
+      // テロップ（下部・背景付き）
+      {
+        filter: "drawbox",
+        options: {
+          x: 0,
+          y: "ih-90",
+          width: "iw",
+          height: 90,
+          color: "black@0.6",
+          t: "fill"
+        }
+      },
+      {
+        filter: "drawtext",
+        options: {
+          fontfile: FONT_PATH,
+          text: subtitle,
+          fontsize: 32,
+          fontcolor: "white",
+          x: 30,
+          y: "h-65"
         }
       }
     ])
-    .on("start", (commandLine) => {
-      console.log("FFmpeg開始:", commandLine);
+    .outputOptions([
+      "-c:v libx264",
+      "-preset fast",
+      "-crf 23",
+      "-c:a aac",
+      "-movflags +faststart"
+    ])
+    .on("start", (cmd) => {
+      console.log("FFmpeg開始:", cmd);
     })
     .on("end", () => {
+      console.log("動画生成完了:", outputPath);
 
-      console.log("動画生成完了");
+      // アップロードした元ファイルを削除
+      fs.unlink(inputPath, () => {});
 
-      // ファイル存在確認
       if (!fs.existsSync(outputPath)) {
-        console.log("出力ファイルが存在しない");
-        return res.status(500).json({ error: "動画生成失敗" });
+        return res.status(500).json({ error: "出力ファイルが見つかりません" });
       }
 
-      // URL返却
-      const fileUrl = `https://video-api-1-nvo2.onrender.com/${outputFileName}`;
-
-      console.log("返却URL:", fileUrl);
-
+      const fileUrl = `https://video-api-1-nvo2.onrender.com/outputs/${outputFileName}`;
+      console.log("URL:", fileUrl);
       return res.json({ url: fileUrl });
     })
-.on("error", (err, stdout, stderr) => {
-  console.error("FFmpegエラー:", err.message);
-  console.error("stderr:", stderr);
-
-  return res.status(500).json({
-    error: err.message,
-    detail: stderr
-  });
-})
+    .on("error", (err, stdout, stderr) => {
+      console.error("FFmpegエラー:", err.message);
+      console.error("stderr:", stderr);
+      fs.unlink(inputPath, () => {});
+      return res.status(500).json({ error: err.message, detail: stderr });
+    })
     .save(outputPath);
 });
 
 // ===== サーバー起動 =====
-app.listen(3000, () => {
-  console.log("Server running");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
