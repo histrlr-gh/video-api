@@ -112,13 +112,17 @@ app.post("/generate", upload.single("video"), (req, res) => {
         }
       }
     ])
-    .outputOptions([
-      "-c:v libx264",
-      "-preset fast",
-      "-crf 23",
-      "-c:a aac",
-      "-movflags +faststart"
-    ])
+.outputOptions([
+  "-c:v libx264",
+  "-preset fast",
+  "-crf 23",
+  "-c:a aac",
+  "-ac 2",
+  "-ar 44100",
+  "-af aresample=async=1",
+  "-movflags +faststart",
+  "-max_muxing_queue_size 1024"  // ← 追加：キュー詰まり対策
+])
     .on("start", (cmd) => {
       console.log("FFmpeg開始:", cmd);
     })
